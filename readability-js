@@ -25,18 +25,18 @@
 //
 // *Second Note*: On EndeavourOS and Manjaro you may want to add the path as follows:
 //
-// 	       	(sudo) touch nodejs.sh in /etc/profile.d
+//              (sudo) touch nodejs.sh in /etc/profile.d
 //
-// 	add the following:
+//      add the following:
 //
-// 		#!/bin/sh
-//		export NODE_PATH=$NODE_PATH:$(npm root -g)
-//	
-//	make executable:
-//		
-//		(sudo) chmod +x nodejs.sh
+//              #!/bin/sh
+//              export NODE_PATH=$NODE_PATH:$(npm root -g)
 //
-//	log out and log back in
+//      make executable:
+//
+//              (sudo) chmod +x nodejs.sh
+//
+//      log out and log back in
 //
 // # Usage
 //
@@ -45,42 +45,53 @@
 // One may wish to define an easy to type command alias in qutebrowser's configuration file:
 // c.aliases = {"readability" : "spawn --userscript readability-js", ...}
 
-const { Readability } = require('@mozilla/readability');
-const qute = require('qutejs');
-const { JSDOM } = require('jsdom');
-const fs = require('fs');
-const path = require('path');
-const util = require('util');
+const { Readability } = require("@mozilla/readability");
+const qute = require("qutejs");
+const { JSDOM } = require("jsdom");
+const fs = require("fs");
+const path = require("path");
+const util = require("util");
 
 // Helper: Read qutebrowser configuration to extract color values
 const getQuteBrowserColors = () => {
-    try {
-        const configPath = path.join(process.env.HOME, '.config', 'qutebrowser', 'config.py');
-        const config = fs.readFileSync(configPath, 'utf8');
+  try {
+    const configPath = path.join(
+      process.env.HOME,
+      ".config",
+      "qutebrowser",
+      "config.py",
+    );
+    const config = fs.readFileSync(configPath, "utf8");
 
-        // Parse colors from config using regular expressions
-        const colorMatches = {
-            bg: config.match(/c\.colors\.webpage\.bg\s*=\s*['"]([^'"]+)['"]/),
-            fg: config.match(/c\.colors\.webpage\.fg\s*=\s*['"]([^'"]+)['"]/),
-            darkmode: config.match(/c\.colors\.webpage\.darkmode\.enabled\s*=\s*(True|False)/),
-            accent: config.match(/c\.colors\.tabs\.selected\.bg\s*=\s*['"]([^'"]+)['"]/),
-        };
+    // Parse colors from config using regular expressions
+    const colorMatches = {
+      bg: config.match(/c\.colors\.webpage\.bg\s*=\s*['"]([^'"]+)['"]/),
+      fg: config.match(/c\.colors\.webpage\.fg\s*=\s*['"]([^'"]+)['"]/),
+      darkmode: config.match(
+        /c\.colors\.webpage\.darkmode\.enabled\s*=\s*(True|False)/,
+      ),
+      accent: config.match(
+        /c\.colors\.tabs\.selected\.bg\s*=\s*['"]([^'"]+)['"]/,
+      ),
+    };
 
-        return {
-            background: colorMatches.bg ? colorMatches.bg[1] : '#ffffff',
-            foreground: colorMatches.fg ? colorMatches.fg[1] : '#000000',
-            darkMode: colorMatches.darkmode ? colorMatches.darkmode[1] === 'True' : false,
-            accent: colorMatches.accent ? colorMatches.accent[1] : '#285577'
-        };
-    } catch (error) {
-        console.error('Error reading qutebrowser config:', error);
-        return {
-            background: '#ffffff',
-            foreground: '#000000',
-            darkMode: false,
-            accent: '#285577'
-        };
-    }
+    return {
+      background: colorMatches.bg ? colorMatches.bg[1] : "#ffffff",
+      foreground: colorMatches.fg ? colorMatches.fg[1] : "#000000",
+      darkMode: colorMatches.darkmode
+        ? colorMatches.darkmode[1] === "True"
+        : false,
+      accent: colorMatches.accent ? colorMatches.accent[1] : "#285577",
+    };
+  } catch (error) {
+    console.error("Error reading qutebrowser config:", error);
+    return {
+      background: "#ffffff",
+      foreground: "#000000",
+      darkMode: false,
+      accent: "#285577",
+    };
+  }
 };
 
 const qutebrowserColors = getQuteBrowserColors();
@@ -108,7 +119,7 @@ const HEADER = `
         :root[data-theme="dark"] {
             --text-color: #f0f2f4;
             --bg-color: #1a1c1e;
-            --link-color: ${qutebrowserColors.accent};
+            --link-color: #66ccff;
             --quote-bg: #2d333b;
             --code-bg: #2d333b;
             --border-color: #373e47;
@@ -136,7 +147,7 @@ const HEADER = `
             :root {
                 --text-color: #f0f2f4;
                 --bg-color: #1a1c1e;
-                --link-color: #61afef;
+                --link-color: #66ccff;
                 --quote-bg: #2d333b;
                 --code-bg: #2d333b;
                 --border-color: #373e47;
@@ -358,8 +369,7 @@ const HEADER = `
     HZpZXdCb3g9IjAgMCA2NCA2NCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPGcgZmlsbD0iI2ZmZiI+CjxwYXRoIGQ9Im01MiAwaC00
     MGMtNC40MiAwLTggMy41OC04IDh2NDhjMCA0LjQyIDMuNTggOCA4IDhoNDBjNC40MiAwIDgtMy41OCA4LTh2LTQ4YzAtNC40Mi0zLjU4LTgtOC04em0wIDU
     yYzAgMi4yMS0xLjc5IDQtNCA0aC0zMmMtMi4yMSAwLTQtMS43OS00LTR2LTQwYzAtMi4yMSAxLjc5LTQgNC00aDMyYzIuMjEgMCA0IDEuNzkgNCA0em0tMT
-    AtMzZoLTIwYy0xLjExIDAtMiAwLjg5NS0yIDJzMC44OTUgMiAyIDJoMjBjMS4xMSAwIDItMC44OTUgMi0ycy0wLjg5NS0yLTItMnptMCA4aC0yMGMtMS4xM
-    SAEwLTIgMC44OTUtMiAyczAuODk1IDIgMiAyaDhjMS4xMSAwIDItMC44OTUgMi0ycy0wLjg5NS0yLTItMnoiIGZpbGw9IiNmZmYiLz4KPC9nPgo8L3N2Zz4K"/>
+    AtMzZoLTIwYy0xLjExIDAtMiAwLjg5NS0yIDJzMC44OTUgMiAyIDJoMjBjMS4xMSAwIDItMC44OTUgMi0ycy0wLjg5NS0yLTItMnoiIGZpbGw9IiNmZmYiLz4KPC9nPgo8L3N2Zz4K"/>
 </head>
 <body class="qute-readability">
     <div class="controls">
@@ -530,54 +540,64 @@ const HEADER = `
 `;
 
 // Determine userscripts directory and temporary output file
-const scriptsDir = path.join(process.env.QUTE_DATA_DIR, 'userscripts');
+const scriptsDir = path.join(process.env.QUTE_DATA_DIR, "userscripts");
 // Remove the leading slash so that the file is placed in scriptsDir.
-const tmpFile = path.join(scriptsDir, 'readability.html');
+const tmpFile = path.join(scriptsDir, "readability.html");
 
 // Ensure that the userscripts directory exists (create recursively if needed)
 if (!fs.existsSync(scriptsDir)) {
-    fs.mkdirSync(scriptsDir, { recursive: true });
+  fs.mkdirSync(scriptsDir, { recursive: true });
 }
 
 // Destructure key environment variables
 const { QUTE_DATA_DIR, QUTE_URL, QUTE_HTML, QUTE_MODE } = process.env;
 if (!QUTE_DATA_DIR || !QUTE_URL) {
-    console.error("Required environment variables QUTE_DATA_DIR and QUTE_URL are not set.");
-    process.exit(1);
+  console.error(
+    "Required environment variables QUTE_DATA_DIR and QUTE_URL are not set.",
+  );
+  process.exit(1);
 }
-if (QUTE_MODE !== 'hints' && !QUTE_HTML) {
-    console.error("Non-hint mode requires QUTE_HTML to be defined.");
-    process.exit(1);
+if (QUTE_MODE !== "hints" && !QUTE_HTML) {
+  console.error("Non-hint mode requires QUTE_HTML to be defined.");
+  process.exit(1);
 }
 
 // Determine which DOM retrieval method and target to use based on QUTE_MODE
 let getDOM, domOpts, target;
-if (QUTE_MODE === 'hints') {
-    getDOM = JSDOM.fromURL;
-    target = QUTE_URL;
+if (QUTE_MODE === "hints") {
+  getDOM = JSDOM.fromURL;
+  target = QUTE_URL;
 } else {
-    getDOM = JSDOM.fromFile;
-    domOpts = { url: QUTE_URL, contentType: "text/html; charset=utf-8" };
-    target = QUTE_HTML;
+  getDOM = JSDOM.fromFile;
+  domOpts = { url: QUTE_URL, contentType: "text/html; charset=utf-8" };
+  target = QUTE_HTML;
 }
 
 // Main async IIFE to fetch, process, and write the article HTML
 (async () => {
-    try {
-        const dom = await getDOM(target, domOpts);
-        const reader = new Readability(dom.window.document);
-        const article = reader.parse();
-        if (!article) {
-            qute.messageError(["Could not parse the article content."]);
-            process.exit(1);
-        }
-        const subtitle = (article.siteName == null) ? new URL(QUTE_URL).hostname : article.siteName;
-        const content = util.format(HEADER, article.title, article.title, QUTE_URL, subtitle, article.content);
-        await fs.promises.writeFile(tmpFile, content);
-        // Open the generated HTML file in a new tab with reload enabled
-        qute.open(['-t', '-r', tmpFile]);
-    } catch (err) {
-        qute.messageError([`Error: ${err.message || err}`]);
-        process.exit(1);
+  try {
+    const dom = await getDOM(target, domOpts);
+    const reader = new Readability(dom.window.document);
+    const article = reader.parse();
+    if (!article) {
+      qute.messageError(["Could not parse the article content."]);
+      process.exit(1);
     }
+    const subtitle =
+      article.siteName == null ? new URL(QUTE_URL).hostname : article.siteName;
+    const content = util.format(
+      HEADER,
+      article.title,
+      article.title,
+      QUTE_URL,
+      subtitle,
+      article.content,
+    );
+    await fs.promises.writeFile(tmpFile, content);
+    // Open the generated HTML file in a new tab with reload enabled
+    qute.open(["-t", "-r", tmpFile]);
+  } catch (err) {
+    qute.messageError([`Error: ${err.message || err}`]);
+    process.exit(1);
+  }
 })();
