@@ -1,0 +1,583 @@
+#!/usr/bin/env node
+"use strict";
+//
+// # Description
+//
+// Summarize the current page in a new tab by processing it with the standalone
+// Readability library used for Firefox Reader View.
+//
+// # Prerequisites
+//
+// - Mozilla's readability library (npm install -g @mozilla/readability)
+//     - Also available in the AUR as nodejs-readability-git
+// - jsdom (npm install -g jsdom)
+// - qutejs (npm install -g qutejs)
+//
+// - Ensure that node knows where to find your globally installed modules by adding
+//   the following to ~/.profile or /etc/profile:
+//
+//   export NODE_PATH=$NODE_PATH:$(npm root -g)
+//
+// *Note*: On some Linux distros and macOS, it may be easier to set NODE_PATH using qutebrowser's
+// qt.environ setting. For instance, if 'npm root -g' returns /usr/lib/node_modules, then run:
+//
+//   :set qt.environ '{"NODE_PATH": "/usr/lib/node_modules"}'
+//
+// *Second Note*: On EndeavourOS and Manjaro you may want to add the path as follows:
+//
+// 	       	(sudo) touch nodejs.sh in /etc/profile.d
+//
+// 	add the following:
+//
+// 		#!/bin/sh
+//		export NODE_PATH=$NODE_PATH:$(npm root -g)
+//	
+//	make executable:
+//		
+//		(sudo) chmod +x nodejs.sh
+//
+//	log out and log back in
+//
+// # Usage
+//
+// :spawn --userscript readability-js
+//
+// One may wish to define an easy to type command alias in qutebrowser's configuration file:
+// c.aliases = {"readability" : "spawn --userscript readability-js", ...}
+
+const { Readability } = require('@mozilla/readability');
+const qute = require('qutejs');
+const { JSDOM } = require('jsdom');
+const fs = require('fs');
+const path = require('path');
+const util = require('util');
+
+// Helper: Read qutebrowser configuration to extract color values
+const getQuteBrowserColors = () => {
+    try {
+        const configPath = path.join(process.env.HOME, '.config', 'qutebrowser', 'config.py');
+        const config = fs.readFileSync(configPath, 'utf8');
+
+        // Parse colors from config using regular expressions
+        const colorMatches = {
+            bg: config.match(/c\.colors\.webpage\.bg\s*=\s*['"]([^'"]+)['"]/),
+            fg: config.match(/c\.colors\.webpage\.fg\s*=\s*['"]([^'"]+)['"]/),
+            darkmode: config.match(/c\.colors\.webpage\.darkmode\.enabled\s*=\s*(True|False)/),
+            accent: config.match(/c\.colors\.tabs\.selected\.bg\s*=\s*['"]([^'"]+)['"]/),
+        };
+
+        return {
+            background: colorMatches.bg ? colorMatches.bg[1] : '#ffffff',
+            foreground: colorMatches.fg ? colorMatches.fg[1] : '#000000',
+            darkMode: colorMatches.darkmode ? colorMatches.darkmode[1] === 'True' : false,
+            accent: colorMatches.accent ? colorMatches.accent[1] : '#285577'
+        };
+    } catch (error) {
+        console.error('Error reading qutebrowser config:', error);
+        return {
+            background: '#ffffff',
+            foreground: '#000000',
+            darkMode: false,
+            accent: '#285577'
+        };
+    }
+};
+
+const qutebrowserColors = getQuteBrowserColors();
+
+// The HTML template for the new tab, with dynamic theming and interactive controls
+const HEADER = `
+<!DOCTYPE html>
+<html>
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta charset="UTF-8">
+    <title>%s</title>
+    <style type="text/css">
+        :root[data-theme="light"] {
+            --text-color: ${qutebrowserColors.foreground};
+            --bg-color: ${qutebrowserColors.background};
+            --link-color: ${qutebrowserColors.accent};
+            --quote-bg: #f7f9fc;
+            --code-bg: #f8f9fa;
+            --border-color: #e9ecef;
+            --title-color: ${qutebrowserColors.foreground};
+            --subtitle-color: #606f7b;
+        }
+
+        :root[data-theme="dark"] {
+            --text-color: #f0f2f4;
+            --bg-color: #1a1c1e;
+            --link-color: ${qutebrowserColors.accent};
+            --quote-bg: #2d333b;
+            --code-bg: #2d333b;
+            --border-color: #373e47;
+            --title-color: #e2e4e7;
+            --subtitle-color: #a3acb9;
+        }
+
+        :root {
+            /* Width presets */
+            --narrow-width: 65ch;
+            --medium-width: 85ch;
+            --wide-width: 120ch;
+            /* Default to narrow */
+            --content-width: var(--narrow-width);
+            /* Font size presets */
+            --font-size-small: 1rem;
+            --font-size-medium: 1.125rem;
+            --font-size-large: 1.25rem;
+            --font-size-xl: 1.4rem;
+            /* Default font size */
+            --content-font-size: var(--font-size-medium);
+        }
+
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --text-color: #f0f2f4;
+                --bg-color: #1a1c1e;
+                --link-color: #61afef;
+                --quote-bg: #2d333b;
+                --code-bg: #2d333b;
+                --border-color: #373e47;
+                --title-color: #e2e4e7;
+                --subtitle-color: #a3acb9;
+            }
+        }
+
+        .controls {
+            position: fixed;
+            top: 1rem;
+            right: 1rem;
+            background: var(--bg-color);
+            padding: 0.75rem;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            z-index: 1000;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+        }
+
+        .control-group {
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+            padding: 0.25rem;
+            border-radius: 6px;
+        }
+
+        .control-btn {
+            border: none;
+            background: none;
+            cursor: pointer;
+            padding: 0.5rem;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-color);
+            opacity: 0.7;
+            transition: all 0.2s ease;
+        }
+
+        .control-btn:hover {
+            background: var(--quote-bg);
+            opacity: 1;
+        }
+
+        .control-btn.active {
+            opacity: 1;
+            background: var(--quote-bg);
+            color: var(--link-color);
+        }
+
+        .control-divider {
+            width: 1px;
+            height: 24px;
+            background: var(--border-color);
+        }
+
+        body {
+            margin: clamp(1rem, 5vw, 3rem) auto;
+            max-width: min(var(--content-width), 100% - 2rem);
+            font-size: var(--content-font-size);
+            line-height: 1.6;
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
+            padding: 0 1rem;
+            color: var(--text-color);
+            background: var(--bg-color);
+            text-rendering: optimizeLegibility;
+            -webkit-font-smoothing: antialiased;
+            transition: background-color 0.3s ease, color 0.3s ease;
+        }
+
+        h1, h2, h3 {
+            line-height: 1.3;
+            color: var(--title-color);
+            margin-top: 2.5em;
+            margin-bottom: 0.8em;
+            font-weight: 600;
+        }
+
+        h1.reader-title {
+            font-size: 2.5em;
+            line-height: 1.25;
+            width: 100%;
+            margin: 0.5em 0;
+            color: var(--title-color);
+        }
+
+        a {
+            color: var(--link-color);
+            text-decoration: none;
+            border-bottom: 1px solid transparent;
+            transition: border-color 0.2s ease;
+        }
+
+        a:hover {
+            border-bottom-color: var(--link-color);
+        }
+
+        img {
+            max-width: 100%;
+            height: auto;
+            border-radius: 8px;
+            margin: 1.5em 0;
+            display: block;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        }
+
+        p > img:only-child,
+        p > a:only-child > img:only-child,
+        .wp-caption img,
+        figure img {
+            display: block;
+            margin: 1.5em auto;
+        }
+
+        figure {
+            margin: 2em 0;
+            text-align: center;
+        }
+
+        figcaption {
+            color: var(--subtitle-color);
+            font-size: 0.9em;
+            margin-top: 0.5em;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 2em 0;
+            font-size: 0.9em;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        th {
+            background-color: var(--quote-bg);
+            font-weight: 600;
+            color: var(--title-color);
+        }
+
+        tr:nth-child(even) {
+            background-color: var(--quote-bg);
+        }
+
+        pre {
+            padding: 1.25em;
+            overflow: auto;
+            border-radius: 8px;
+            background: var(--code-bg);
+            font-family: 'SF Mono', Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+            font-size: 0.9em;
+            line-height: 1.5;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+
+        code {
+            padding: 0.2em 0.4em;
+            margin: 0;
+            font-size: 0.9em;
+            background: var(--code-bg);
+            border-radius: 4px;
+            font-family: 'SF Mono', Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+        }
+
+        pre > code {
+            padding: 0;
+            background: none;
+        }
+
+        blockquote {
+            margin: 2em 0;
+            padding: 1em 1.5em;
+            border-left: 4px solid var(--link-color);
+            background: var(--quote-bg);
+            border-radius: 0 8px 8px 0;
+            font-style: italic;
+            color: var(--subtitle-color);
+        }
+
+        hr {
+            border: none;
+            border-top: 2px solid var(--border-color);
+            margin: 2em 0;
+        }
+
+        .subtitle {
+            color: var(--subtitle-color);
+            font-size: 1.1em;
+            margin-bottom: 2em;
+        }
+
+        @media (max-width: 600px) {
+            body {
+                font-size: 1rem;
+            }
+
+            h1.reader-title {
+                font-size: 2em;
+            }
+        }
+    </style>
+    <!-- This icon is licensed under the Mozilla Public License 2.0 (available at: https://www.mozilla.org/en-US/MPL/2.0/).
+         The original icon can be found here: https://dxr.mozilla.org/mozilla-central/source/browser/themes/shared/reader/readerMode.svg -->
+    <link rel="shortcut icon" href="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjRweCIgaGVpZ2h0PSI2NHB4IiB2ZXJzaW9uPSIxLjEiI
+    HZpZXdCb3g9IjAgMCA2NCA2NCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPGcgZmlsbD0iI2ZmZiI+CjxwYXRoIGQ9Im01MiAwaC00
+    MGMtNC40MiAwLTggMy41OC04IDh2NDhjMCA0LjQyIDMuNTggOCA4IDhoNDBjNC40MiAwIDgtMy41OCA4LTh2LTQ4YzAtNC40Mi0zLjU4LTgtOC04em0wIDU
+    yYzAgMi4yMS0xLjc5IDQtNCA0aC0zMmMtMi4yMSAwLTQtMS43OS00LTR2LTQwYzAtMi4yMSAxLjc5LTQgNC00aDMyYzIuMjEgMCA0IDEuNzkgNCA0em0tMT
+    AtMzZoLTIwYy0xLjExIDAtMiAwLjg5NS0yIDJzMC44OTUgMiAyIDJoMjBjMS4xMSAwIDItMC44OTUgMi0ycy0wLjg5NS0yLTItMnptMCA4aC0yMGMtMS4xM
+    SAEwLTIgMC44OTUtMiAyczAuODk1IDIgMiAyaDhjMS4xMSAwIDItMC44OTUgMi0ycy0wLjg5NS0yLTItMnoiIGZpbGw9IiNmZmYiLz4KPC9nPgo8L3N2Zz4K"/>
+</head>
+<body class="qute-readability">
+    <div class="controls">
+        <!-- Width options dropdown -->
+        <div class="control-group dropdown">
+            <button class="control-btn" onclick="toggleDropdown('width-dropdown')" title="Adjust width">
+                <!-- New width icon: horizontal double arrow -->
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="3" y1="12" x2="21" y2="12"></line>
+                    <polyline points="9 18 3 12 9 6"></polyline>
+                    <polyline points="15 6 21 12 15 18"></polyline>
+                </svg>
+            </button>
+            <div id="width-dropdown" class="dropdown-content">
+                <button onclick="setWidth('var(--narrow-width)')" class="dropdown-item">
+                    <svg width="16" height="16" viewBox="0 0 16 16">
+                        <line x1="4" y1="8" x2="12" y2="8" stroke="currentColor" stroke-width="2"/>
+                    </svg>
+                    Narrow
+                </button>
+                <button onclick="setWidth('var(--medium-width)')" class="dropdown-item">
+                    <svg width="16" height="16" viewBox="0 0 16 16">
+                        <line x1="2" y1="8" x2="14" y2="8" stroke="currentColor" stroke-width="2"/>
+                    </svg>
+                    Medium
+                </button>
+                <button onclick="setWidth('var(--wide-width)')" class="dropdown-item">
+                    <svg width="16" height="16" viewBox="0 0 16 16">
+                        <line x1="1" y1="8" x2="15" y2="8" stroke="currentColor" stroke-width="2"/>
+                    </svg>
+                    Wide
+                </button>
+                <button onclick="setWidth('100%')" class="dropdown-item">
+                    <svg width="16" height="16" viewBox="0 0 16 16">
+                        <rect x="1" y="4" width="14" height="8" stroke="currentColor" stroke-width="1" fill="none" rx="2" />
+                    </svg>
+                    Full
+                </button>
+            </div>
+        </div>
+        <div class="control-divider"></div>
+        <!-- Font size controls -->
+        <div class="control-group">
+            <button class="control-btn" onclick="decreaseFontSize()" title="Decrease font size">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="5" y1="12" x2="19" y2="12"/>
+                </svg>
+            </button>
+            <button class="control-btn" onclick="increaseFontSize()" title="Increase font size">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="12" y1="5" x2="12" y2="19"/>
+                    <line x1="5" y1="12" x2="19" y2="12"/>
+                </svg>
+            </button>
+        </div>
+        <div class="control-divider"></div>
+        <!-- Dark mode toggle -->
+        <button class="control-btn" onclick="toggleTheme()" title="Toggle dark mode">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="5" />
+                <line x1="12" y1="1" x2="12" y2="3" />
+                <line x1="12" y1="21" x2="12" y2="23" />
+                <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
+                <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
+                <line x1="1" y1="12" x2="3" y2="12" />
+                <line x1="21" y1="12" x2="23" y2="12" />
+                <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
+                <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
+            </svg>
+        </button>
+        <div class="control-divider"></div>
+        <!-- Print button -->
+        <button class="control-btn" onclick="window.print()" title="Print article">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="6 9 6 2 18 2 18 9"></polyline>
+                <path d="M6 18H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-2"></path>
+                <rect x="6" y="14" width="12" height="8"></rect>
+            </svg>
+        </button>
+    </div>
+    <style>
+        .dropdown {
+            position: relative;
+            display: inline-block;
+        }
+
+        .dropdown-content {
+            display: none;
+            position: absolute;
+            right: 0;
+            background: var(--bg-color);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+            z-index: 1001;
+            min-width: 120px;
+        }
+
+        .dropdown-content.show {
+            display: block;
+        }
+
+        .dropdown-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            width: 100%;
+            border: none;
+            background: none;
+            color: var(--text-color);
+            cursor: pointer;
+            text-align: left;
+        }
+
+        .dropdown-item:hover {
+            background: var(--quote-bg);
+        }
+    </style>
+    <script>
+        // Set initial theme based on browser's prefers-color-scheme
+        document.documentElement.dataset.theme = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+
+        function toggleDropdown(id) {
+            document.getElementById(id).classList.toggle('show');
+        }
+
+        function setWidth(width) {
+            document.documentElement.style.setProperty('--content-width', width);
+            document.getElementById('width-dropdown').classList.remove('show');
+        }
+
+        function toggleTheme() {
+            const currentTheme = document.documentElement.dataset.theme;
+            const newTheme = currentTheme === 'light' ? 'dark' : 'light';
+            document.documentElement.dataset.theme = newTheme;
+        }
+
+        // Close dropdown when clicking outside the dropdown container
+        window.addEventListener('click', function(event) {
+            if (!event.target.closest('.dropdown')) {
+                document.querySelectorAll('.dropdown-content.show').forEach(dropdown => {
+                    dropdown.classList.remove('show');
+                });
+            }
+        });
+
+        // Font size controls
+        let currentFontSize = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--content-font-size')) || 1.125;
+        function updateFontSize() {
+            document.documentElement.style.setProperty('--content-font-size', currentFontSize + 'rem');
+        }
+        function increaseFontSize() {
+            currentFontSize += 0.1;
+            updateFontSize();
+        }
+        function decreaseFontSize() {
+            currentFontSize = Math.max(0.8, currentFontSize - 0.1);
+            updateFontSize();
+        }
+    </script>
+    <h1 class="reader-title">%s</h1>
+    <div class="subtitle">From <a class="reader-title" href="%s">%s</a></div>
+    <hr>
+    %s
+</body>
+</html>
+`;
+
+// Determine userscripts directory and temporary output file
+const scriptsDir = path.join(process.env.QUTE_DATA_DIR, 'userscripts');
+// Remove the leading slash so that the file is placed in scriptsDir.
+const tmpFile = path.join(scriptsDir, 'readability.html');
+
+// Ensure that the userscripts directory exists (create recursively if needed)
+if (!fs.existsSync(scriptsDir)) {
+    fs.mkdirSync(scriptsDir, { recursive: true });
+}
+
+// Destructure key environment variables
+const { QUTE_DATA_DIR, QUTE_URL, QUTE_HTML, QUTE_MODE } = process.env;
+if (!QUTE_DATA_DIR || !QUTE_URL) {
+    console.error("Required environment variables QUTE_DATA_DIR and QUTE_URL are not set.");
+    process.exit(1);
+}
+if (QUTE_MODE !== 'hints' && !QUTE_HTML) {
+    console.error("Non-hint mode requires QUTE_HTML to be defined.");
+    process.exit(1);
+}
+
+// Determine which DOM retrieval method and target to use based on QUTE_MODE
+let getDOM, domOpts, target;
+if (QUTE_MODE === 'hints') {
+    getDOM = JSDOM.fromURL;
+    target = QUTE_URL;
+} else {
+    getDOM = JSDOM.fromFile;
+    domOpts = { url: QUTE_URL, contentType: "text/html; charset=utf-8" };
+    target = QUTE_HTML;
+}
+
+// Main async IIFE to fetch, process, and write the article HTML
+(async () => {
+    try {
+        const dom = await getDOM(target, domOpts);
+        const reader = new Readability(dom.window.document);
+        const article = reader.parse();
+        if (!article) {
+            qute.messageError(["Could not parse the article content."]);
+            process.exit(1);
+        }
+        const subtitle = (article.siteName == null) ? new URL(QUTE_URL).hostname : article.siteName;
+        const content = util.format(HEADER, article.title, article.title, QUTE_URL, subtitle, article.content);
+        await fs.promises.writeFile(tmpFile, content);
+        // Open the generated HTML file in a new tab with reload enabled
+        qute.open(['-t', '-r', tmpFile]);
+    } catch (err) {
+        qute.messageError([`Error: ${err.message || err}`]);
+        process.exit(1);
+    }
+})();
